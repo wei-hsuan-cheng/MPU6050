@@ -14,6 +14,30 @@ By the act of copying, use, setup or assembly, the user accepts all resulting li
 */
 #include <Arduino.h>
 #include <Wire.h>
+
+#include <BasicLinearAlgebra.h>
+using namespace BLA;
+
+template <int Dim, typename DType = float>
+struct DiagonalMatrix : public MatrixBase<DiagonalMatrix<Dim>, Dim, Dim, DType>
+{
+    Matrix<Dim, 1, DType> diagonal;
+
+    // For const matrices (ones whose elements can't be modified) you just need to implement this function:
+    DType operator()(int row, int col) const
+    {
+        // If it's on the diagonal and it's not larger than the matrix dimensions then return the element
+        if (row == col)
+            return diagonal(row);
+        else
+            // Otherwise return zero
+            return 0.0f;
+    }
+
+    // If you want to declare a matrix whose elements can be modified then you'll need to define this function:
+    // DType& operator()(int row, int col)
+};
+
 float RateRoll, RatePitch, RateYaw;
 float RateCalibrationRoll, RateCalibrationPitch, RateCalibrationYaw;
 int RateCalibrationNumber;
@@ -118,6 +142,42 @@ void print_results(float valueX, float valueY, float valueZ) {
   Serial.print("]; ");
 }
 
+void TestBLA()
+{
+    // If you've been through the HowToUse example you'll know that you can allocate a Matrix and explicitly specify
+    // it's type like so:
+    BLA::Matrix<4, 4> mat;
+
+    // And as before it's a good idea to fill the matrix before we use it
+    mat.Fill(1);
+
+    // Now let's declare a diagonal matrix. To do that we pass the Diagonal class from above along with whatever
+    // template parameters as a template parameter to Matrix, like so:
+    DiagonalMatrix<4> diag;
+
+    // If we fill diag we'll get a matrix with all 1's along the diagonal, the identity matrix.
+    diag.diagonal.Fill(1);
+
+    // So multiplying it with mat will do nothing:
+    Serial.print("still ones: ");
+    Serial.println(diag * mat);
+
+    // Diagonal matrices have the handy property of scaling either the rows (premultiplication) or columns
+    // (postmultiplication) of a matrix
+
+    // So if we modify the diagonal
+    for (int i = 0; i < diag.Rows; i++) diag.diagonal(i) = i + 1;
+
+    // And multiply again, we'll see that the rows have been scaled
+    Serial.print("scaled rows: ");
+    Serial.print(diag * mat);
+
+    // Point being, if you define a class which serves up something when called upon by the () operator, you can embed
+    // it in a matrix and define any kind of behaviour you like. Hopefully that'll let this library support lots more
+    // applications while catering to the arduino's limited amount of memory.
+}
+
+
 void setup() {
   Serial.begin(57600);
   pinMode(13, OUTPUT);
@@ -140,6 +200,9 @@ void setup() {
   RateCalibrationPitch/=2000;
   RateCalibrationYaw/=2000;
   LoopTimer=micros();
+
+  TestBLA();
+
 }
 
 void loop() {
@@ -168,8 +231,8 @@ void loop() {
   compute_pz_vz(AccZ);
 
   // Print results
-  Serial.print("Acc [m / s^2]");
-  print_results(AccX, AccY, AccZ);
+  // Serial.print("Acc [m / s^2]");
+  // print_results(AccX, AccY, AccZ);
 
   // Serial.print("Vel [m / s] = [");
   // print_results(VelX, VelY, VelZ);
@@ -177,8 +240,8 @@ void loop() {
   // Serial.print("Pos [m] = [");
   // print_results(PosX, PosY, PosZ);
 
-  Serial.print("Omega [° / s]");
-  print_results(RateRoll, RatePitch, RateYaw);
+  // Serial.print("Omega [° / s]");
+  // print_results(RateRoll, RatePitch, RateYaw);
 
   Serial.print("Orientation [°]");
   print_results(KalmanAngleRoll, KalmanAnglePitch, AngleYaw);
