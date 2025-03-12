@@ -201,7 +201,7 @@ void setup() {
   RateCalibrationYaw/=2000;
   LoopTimer=micros();
 
-  TestBLA();
+  // TestBLA();
 
 }
 
