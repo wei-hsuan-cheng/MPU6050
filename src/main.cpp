@@ -14,8 +14,8 @@ By the act of copying, use, setup or assembly, the user accepts all resulting li
 */
 #include <Arduino.h>
 #include <Wire.h>
-
 #include <BasicLinearAlgebra.h>
+
 using namespace BLA;
 
 template <int Dim, typename DType = float>
@@ -41,18 +41,20 @@ struct DiagonalMatrix : public MatrixBase<DiagonalMatrix<Dim>, Dim, Dim, DType>
 float RateRoll, RatePitch, RateYaw;
 float RateCalibrationRoll, RateCalibrationPitch, RateCalibrationYaw;
 int RateCalibrationNumber;
+int RateCalibrationTotalNumber = 2000;
 float g = 9.80665;
 float AccX, AccY, AccZ;
 float AccxOffset, AccyOffset, AcczOffset;
 float PosX = 0.0, PosY = 0.0, PosZ = 0.0;
 float VelX = 0.0, VelY = 0.0, VelZ = 0.0;
 float AngleRoll, AnglePitch;
-float AngleYaw = 0.0;
+float AngleRollIntegration = 0.0, AnglePitchIntegration = 0.0, AngleYawIntegration = 0.0;
 uint32_t LoopTimer;
-uint32_t Ts_ms = 4;
-float Ts = 0.004;
-float PNstd = 4.0 * pow(10, 0.0);
-float MNstd = 2.5 * pow(10, -1.0);
+float Ts = 0.004; // [s]
+uint32_t Ts_ms = (int) (Ts * 1000); // [ms]
+uint32_t Ts_us = (int) (Ts * 1000000); // [us]
+float PNstd = 4.0 * pow(10.0, 0.0);
+float MNstd = 2.5 * pow(10.0, -1.0);
 float KalmanAngleRoll=0, KalmanUncertaintyAngleRoll=2*2;
 float KalmanAnglePitch=0, KalmanUncertaintyAnglePitch=2*2;
 float Kalman1DOutput[]={0,0};
@@ -85,9 +87,13 @@ void imu_signals(void) {
   int16_t GyroX=Wire.read()<<8 | Wire.read();
   int16_t GyroY=Wire.read()<<8 | Wire.read();
   int16_t GyroZ=Wire.read()<<8 | Wire.read();
-  RateRoll=(float)GyroX/65.5;
-  RatePitch=(float)GyroY/65.5;
-  RateYaw=(float)GyroZ/65.5;
+  // RateRoll=(float)GyroX/65.5;
+  // RatePitch=(float)GyroY/65.5;
+  // RateYaw=(float)GyroZ/65.5;
+
+  RateRoll = (float) GyroX * 2.0 / 65.5;
+  RatePitch = (float) GyroY * 2.0 / 65.5;
+  RateYaw = (float) GyroZ * 2.0 / 65.5;
 
   AccxOffset = -0.02;
   AccyOffset = 0.01;
@@ -103,6 +109,12 @@ void imu_signals(void) {
   AnglePitch = -atan(AccX/sqrt(AccY*AccY + AccZ*AccZ)) * 1/(3.142/180);
 }
 
+void remove_omega_bias() {
+  RateRoll -= RateCalibrationRoll;
+  RatePitch -= RateCalibrationPitch;
+  RateYaw -= RateCalibrationYaw;
+}
+
 void kalman_1d(float KalmanState, float KalmanUncertainty, float KalmanInput, float KalmanMeasurement) {
   KalmanState = KalmanState + Ts*KalmanInput;
   KalmanUncertainty = KalmanUncertainty + Ts*Ts * PNstd*PNstd;
@@ -113,8 +125,16 @@ void kalman_1d(float KalmanState, float KalmanUncertainty, float KalmanInput, fl
   Kalman1DOutput[1] = KalmanUncertainty;
 }
 
+void compute_thx(float wx) {
+  AngleRollIntegration += Ts * wx;
+}
+
+void compute_thy(float wy) {
+  AnglePitchIntegration += Ts * wy;
+}
+
 void compute_thz(float wz) {
-  AngleYaw += Ts * wz;
+  AngleYawIntegration += Ts * wz;
 }
 
 void compute_px_vx(float a) {
@@ -189,16 +209,19 @@ void setup() {
   Wire.write(0x6B);
   Wire.write(0x00);
   Wire.endTransmission();
-  for (RateCalibrationNumber=0; RateCalibrationNumber<2000; RateCalibrationNumber ++) {
+  for (RateCalibrationNumber = 0; RateCalibrationNumber < RateCalibrationTotalNumber; RateCalibrationNumber ++) {
     imu_signals();
-    RateCalibrationRoll+=RateRoll;
-    RateCalibrationPitch+=RatePitch;
-    RateCalibrationYaw+=RateYaw;
+    RateCalibrationRoll += RateRoll;
+    RateCalibrationPitch += RatePitch;
+    RateCalibrationYaw += RateYaw;
+    Serial.print("[MPU6050 Gyro Calibration] ");
+    Serial.print( (float) RateCalibrationNumber / RateCalibrationTotalNumber * 100);
+    Serial.println("%");
     delay(1);
   }
-  RateCalibrationRoll/=2000;
-  RateCalibrationPitch/=2000;
-  RateCalibrationYaw/=2000;
+  RateCalibrationRoll /= RateCalibrationTotalNumber;
+  RateCalibrationPitch /= RateCalibrationTotalNumber;
+  RateCalibrationYaw /= RateCalibrationTotalNumber;
   LoopTimer=micros();
 
   // TestBLA();
@@ -208,12 +231,9 @@ void setup() {
 void loop() {
   // Get IMU signals
   imu_signals();
+  remove_omega_bias();
 
   // Orientation estimation
-  RateRoll-=RateCalibrationRoll;
-  RatePitch-=RateCalibrationPitch;
-  RateYaw-=RateCalibrationYaw;
-  
   kalman_1d(KalmanAngleRoll, KalmanUncertaintyAngleRoll, RateRoll, AngleRoll);
   KalmanAngleRoll=Kalman1DOutput[0]; 
   KalmanUncertaintyAngleRoll=Kalman1DOutput[1];
@@ -222,15 +242,19 @@ void loop() {
   KalmanAnglePitch=Kalman1DOutput[0]; 
   KalmanUncertaintyAnglePitch=Kalman1DOutput[1];
 
+  // compute_thx(RateRoll);
+  // compute_thy(RatePitch);
   compute_thz(RateYaw);
 
   // Position estimation
   // Acc requires orientation estimation to do gravity compensation!!! (e.g. use rotation matrix)
-  compute_px_vx(AccX);
-  compute_py_vy(AccY);
-  compute_pz_vz(AccZ);
+  // compute_px_vx(AccX);
+  // compute_py_vy(AccY);
+  // compute_pz_vz(AccZ);
 
   // Print results
+  // Serial.print("[MPU6050 position and orientation estimation] ");
+
   // Serial.print("Acc [m / s^2]");
   // print_results(AccX, AccY, AccZ);
 
@@ -240,15 +264,16 @@ void loop() {
   // Serial.print("Pos [m] = [");
   // print_results(PosX, PosY, PosZ);
 
-  Serial.print("Omega [° / s]");
-  print_results(RateRoll, RatePitch, RateYaw);
+  // Serial.print("Omega [°/s]");
+  // print_results(RateRoll, RatePitch, RateYaw);
 
   Serial.print("Orientation [°]");
-  print_results(KalmanAngleRoll, KalmanAnglePitch, AngleYaw);
+  print_results(KalmanAngleRoll, KalmanAnglePitch, AngleYawIntegration);
+  // print_results(AngleRollIntegration, AnglePitchIntegration, AngleYawIntegration);
 
   Serial.println("");
 
-  while (micros() - LoopTimer < 4000);
+  while (micros() - LoopTimer < Ts_us);
   LoopTimer=micros();
 }
 
