@@ -240,8 +240,8 @@ void loop() {
   // Serial.print("Pos [m] = [");
   // print_results(PosX, PosY, PosZ);
 
-  // Serial.print("Omega [° / s]");
-  // print_results(RateRoll, RatePitch, RateYaw);
+  Serial.print("Omega [° / s]");
+  print_results(RateRoll, RatePitch, RateYaw);
 
   Serial.print("Orientation [°]");
   print_results(KalmanAngleRoll, KalmanAnglePitch, AngleYaw);
