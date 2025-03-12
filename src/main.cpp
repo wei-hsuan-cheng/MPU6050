@@ -38,13 +38,16 @@ struct DiagonalMatrix : public MatrixBase<DiagonalMatrix<Dim>, Dim, Dim, DType>
     // DType& operator()(int row, int col)
 };
 
+float d2r = 3.14159265359/180.0, r2d = 180.0/3.14159265359;
+float m2mm = 1000.0, mm2m = 0.001;
 float RateRoll, RatePitch, RateYaw;
 float RateCalibrationRoll, RateCalibrationPitch, RateCalibrationYaw;
 int RateCalibrationNumber;
-int RateCalibrationTotalNumber = 2000;
+int RateCalibrationTotalNumber = 1000;
 float g = 9.80665;
 float AccX, AccY, AccZ;
-float AccxOffset, AccyOffset, AcczOffset;
+float AccxOffset = 0.0, AccyOffset = 0.0, AcczOffset = 0.0;
+float AccXCompensated = 0.0, AccYCompensated = 0.0, AccZCompensated = 0.0;
 float PosX = 0.0, PosY = 0.0, PosZ = 0.0;
 float VelX = 0.0, VelY = 0.0, VelZ = 0.0;
 float AngleRoll, AnglePitch;
@@ -87,26 +90,35 @@ void imu_signals(void) {
   int16_t GyroX=Wire.read()<<8 | Wire.read();
   int16_t GyroY=Wire.read()<<8 | Wire.read();
   int16_t GyroZ=Wire.read()<<8 | Wire.read();
-  // RateRoll=(float)GyroX/65.5;
-  // RatePitch=(float)GyroY/65.5;
-  // RateYaw=(float)GyroZ/65.5;
 
-  RateRoll = (float) GyroX * 2.0 / 65.5;
-  RatePitch = (float) GyroY * 2.0 / 65.5;
-  RateYaw = (float) GyroZ * 2.0 / 65.5;
+  // RateRoll = (float) GyroX * (2.0 / 65.5) * d2r;
+  // RatePitch = (float) GyroY * (2.0 / 65.5) * d2r;
+  // RateYaw = (float) GyroZ * (2.0 / 65.5) * d2r;
 
-  AccxOffset = -0.02;
-  AccyOffset = 0.01;
-  AcczOffset = 0.02;
-  AccX = (float)AccXLSB/4096 + AccxOffset;
-  AccY = (float)AccYLSB/4096 + AccyOffset;
-  AccZ = (float)AccZLSB/4096 + AcczOffset;
-  AccX *= g;
-  AccY *= g;
-  AccZ *= g;
+  RateRoll = (float) GyroX * (2.0 / 65.5) * d2r;
+  RatePitch = (float) GyroY * (2.0 / 65.5) * d2r;
+  RateYaw = (float) GyroZ * (2.0 / 65.5) * d2r;
 
-  AngleRoll = atan(AccY/sqrt(AccX*AccX + AccZ*AccZ)) * 1/(3.142/180);
-  AnglePitch = -atan(AccX/sqrt(AccY*AccY + AccZ*AccZ)) * 1/(3.142/180);
+  // AccxOffset = -0.02;
+  // AccyOffset = 0.01;
+  // AcczOffset = 0.02;
+  // AccX = (float) AccXLSB/4096 + AccxOffset;
+  // AccY = (float) AccYLSB/4096 + AccyOffset;
+  // AccZ = (float) AccZLSB/4096 + AcczOffset;
+  // AccX *= g;
+  // AccY *= g;
+  // AccZ *= g;
+
+
+  AccxOffset = -0.13665;
+  AccyOffset = 0.08335;
+  AcczOffset = 0.23665;
+  AccX = (float) AccXLSB * g / 4096 + AccxOffset;
+  AccY = (float) AccYLSB * g / 4096 + AccyOffset;
+  AccZ = (float) AccZLSB * g / 4096 + AcczOffset;
+
+  AngleRoll = atan(AccY/sqrt(AccX*AccX + AccZ*AccZ));
+  AnglePitch = -atan(AccX/sqrt(AccY*AccY + AccZ*AccZ));
 }
 
 void remove_omega_bias() {
@@ -139,17 +151,17 @@ void compute_thz(float wz) {
 
 void compute_px_vx(float a) {
   VelX += Ts * a;
-  PosX += Ts * VelX;
+  PosX += Ts * VelX + 0.5 * Ts * Ts * a;
 }
 
 void compute_py_vy(float a) {
   VelY += Ts * a;
-  PosY += Ts * VelY;
+  PosY += Ts * VelY + 0.5 * Ts * Ts * a;
 }
 
 void compute_pz_vz(float a) {
   VelZ += Ts * a;
-  PosZ += Ts * VelZ;
+  PosZ += Ts * VelZ + 0.5 * Ts * Ts * a;
 }
 
 void print_results(float valueX, float valueY, float valueZ) {
@@ -162,39 +174,64 @@ void print_results(float valueX, float valueY, float valueZ) {
   Serial.print("]; ");
 }
 
-void TestBLA()
-{
-    // If you've been through the HowToUse example you'll know that you can allocate a Matrix and explicitly specify
-    // it's type like so:
-    BLA::Matrix<4, 4> mat;
 
-    // And as before it's a good idea to fill the matrix before we use it
-    mat.Fill(1);
+// Rotation about Z axis
+BLA::Matrix<3, 3> Rotz(float thz) {
+  BLA::Matrix<3, 3> mat;
+  // [ cos(thz)  -sin(thz)   0 ]
+  // [ sin(thz)   cos(thz)   0 ]
+  // [    0          0       1 ]
+  mat(0,0) = cos(thz);
+  mat(0,1) = -sin(thz);
+  mat(0,2) = 0;
+  mat(1,0) = sin(thz);
+  mat(1,1) = cos(thz);
+  mat(1,2) = 0;
+  mat(2,0) = 0;
+  mat(2,1) = 0;
+  mat(2,2) = 1;
+  return mat;
+}
 
-    // Now let's declare a diagonal matrix. To do that we pass the Diagonal class from above along with whatever
-    // template parameters as a template parameter to Matrix, like so:
-    DiagonalMatrix<4> diag;
+// Rotation about Y axis
+BLA::Matrix<3, 3> Roty(float thy) {
+  BLA::Matrix<3, 3> mat;
+  // [  cos(thy)   0   sin(thy) ]
+  // [     0       1      0     ]
+  // [ -sin(thy)   0   cos(thy) ]
+  mat(0,0) = cos(thy);
+  mat(0,1) = 0;
+  mat(0,2) = sin(thy);
+  mat(1,0) = 0;
+  mat(1,1) = 1;
+  mat(1,2) = 0;
+  mat(2,0) = -sin(thy);
+  mat(2,1) = 0;
+  mat(2,2) = cos(thy);
+  return mat;
+}
 
-    // If we fill diag we'll get a matrix with all 1's along the diagonal, the identity matrix.
-    diag.diagonal.Fill(1);
+// Rotation about X axis
+BLA::Matrix<3, 3> Rotx(float thx) {
+  BLA::Matrix<3, 3> mat;
+  // [ 1      0         0      ]
+  // [ 0   cos(thx)  -sin(thx) ]
+  // [ 0   sin(thx)   cos(thx) ]
+  mat(0,0) = 1;
+  mat(0,1) = 0;
+  mat(0,2) = 0;
+  mat(1,0) = 0;
+  mat(1,1) = cos(thx);
+  mat(1,2) = -sin(thx);
+  mat(2,0) = 0;
+  mat(2,1) = sin(thx);
+  mat(2,2) = cos(thx);
+  return mat;
+}
 
-    // So multiplying it with mat will do nothing:
-    Serial.print("still ones: ");
-    Serial.println(diag * mat);
-
-    // Diagonal matrices have the handy property of scaling either the rows (premultiplication) or columns
-    // (postmultiplication) of a matrix
-
-    // So if we modify the diagonal
-    for (int i = 0; i < diag.Rows; i++) diag.diagonal(i) = i + 1;
-
-    // And multiply again, we'll see that the rows have been scaled
-    Serial.print("scaled rows: ");
-    Serial.print(diag * mat);
-
-    // Point being, if you define a class which serves up something when called upon by the () operator, you can embed
-    // it in a matrix and define any kind of behaviour you like. Hopefully that'll let this library support lots more
-    // applications while catering to the arduino's limited amount of memory.
+// Rotation from ZYX Euler angles
+BLA::Matrix<3, 3> Rotzyx(float thz, float thy, float thx) {
+  return Rotz(thz) * Roty(thy) * Rotx(thx);
 }
 
 
@@ -223,9 +260,6 @@ void setup() {
   RateCalibrationPitch /= RateCalibrationTotalNumber;
   RateCalibrationYaw /= RateCalibrationTotalNumber;
   LoopTimer=micros();
-
-  // TestBLA();
-
 }
 
 void loop() {
@@ -242,296 +276,50 @@ void loop() {
   KalmanAnglePitch=Kalman1DOutput[0]; 
   KalmanUncertaintyAnglePitch=Kalman1DOutput[1];
 
-  // compute_thx(RateRoll);
-  // compute_thy(RatePitch);
+  compute_thx(RateRoll);
+  compute_thy(RatePitch);
   compute_thz(RateYaw);
 
   // Position estimation
   // Acc requires orientation estimation to do gravity compensation!!! (e.g. use rotation matrix)
-  // compute_px_vx(AccX);
-  // compute_py_vy(AccY);
-  // compute_pz_vz(AccZ);
+  // Calculate the gravity vector in the sensor frame using rotation matrix from ZYX Euler angles
+  BLA::Matrix<3, 3> R_w_s = Rotzyx(AngleYawIntegration, KalmanAnglePitch, KalmanAngleRoll);
+  BLA::Matrix<3, 1> g_w(0, 0, -g);
+  BLA::Matrix<3, 1> g_s = (~R_w_s) * g_w; // transpose of R_w_s
+  BLA::Matrix<3, 1> a_s(AccX, AccY, AccZ);
+  BLA::Matrix<3, 1> a_s_compensated = a_s + g_s;
+
+  compute_px_vx(a_s_compensated(0));
+  compute_py_vy(a_s_compensated(1));
+  compute_pz_vz(a_s_compensated(2));
 
   // Print results
   // Serial.print("[MPU6050 position and orientation estimation] ");
 
-  // Serial.print("Acc [m / s^2]");
-  // print_results(AccX, AccY, AccZ);
+  // Serial.print("a_s [m/s^2]");
+  // print_results(a_s(0), a_s(1), a_s(2));
 
-  // Serial.print("Vel [m / s] = [");
-  // print_results(VelX, VelY, VelZ);
+  // Serial.print("g_s [m/s^2]");
+  // print_results(g_s(0), g_s(1), g_s(2));
 
-  // Serial.print("Pos [m] = [");
-  // print_results(PosX, PosY, PosZ);
+  // Serial.print("a_s_compensated [m/s^2]");
+  // print_results(a_s_compensated(0), a_s_compensated(1), a_s_compensated(2));
+
+  // Serial.print("Vel [mm/s] = [");
+  // print_results(VelX * m2mm, VelY * m2mm, VelZ * m2mm);
+
+  // Serial.print("Pos [mm] = [");
+  // print_results(PosX * m2mm, PosY * m2mm, PosZ * m2mm);
 
   // Serial.print("Omega [°/s]");
   // print_results(RateRoll, RatePitch, RateYaw);
 
   Serial.print("Orientation [°]");
-  print_results(KalmanAngleRoll, KalmanAnglePitch, AngleYawIntegration);
-  // print_results(AngleRollIntegration, AnglePitchIntegration, AngleYawIntegration);
+  // print_results(KalmanAngleRoll * r2d, KalmanAnglePitch * r2d, AngleYawIntegration * r2d);
+  print_results(AngleRollIntegration * r2d, AnglePitchIntegration * r2d, AngleYawIntegration * r2d);
 
   Serial.println("");
 
   while (micros() - LoopTimer < Ts_us);
   LoopTimer=micros();
 }
-
-
-
-
-// // Part XIV: Measure angles with the accelerometer
-// /*
-// The contents of this code and instructions are the intellectual property of Carbon Aeronautics. 
-// The text and figures in this code and instructions are licensed under a Creative Commons Attribution - Noncommercial - ShareAlike 4.0 International Public Licence. 
-// This license lets you remix, adapt, and build upon your work non-commercially, as long as you credit Carbon Aeronautics 
-// (but not in any way that suggests that we endorse you or your use of the work) and license your new creations under the identical terms.
-// This code and instruction is provided "As Is” without any further warranty. Neither Carbon Aeronautics or the author has any liability to any person or entity 
-// with respect to any loss or damage caused or declared to be caused directly or indirectly by the instructions contained in this code or by 
-// the software and hardware described in it. As Carbon Aeronautics has no control over the use, setup, assembly, modification or misuse of the hardware, 
-// software and information described in this manual, no liability shall be assumed nor accepted for any resulting damage or injury. 
-// By the act of copying, use, setup or assembly, the user accepts all resulting liability.
-
-// 1.0  29 December 2022 -  initial release
-// */
-// #include <Arduino.h>
-// #include <Wire.h>
-// float RateRoll, RatePitch, RateYaw;
-// float AccX, AccY, AccZ;
-// float AccxOffset, AccyOffset, AcczOffset;
-// float AngleRoll, AnglePitch;
-// float LoopTimer;
-// void gyro_signals(void) {
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x1A);
-//   Wire.write(0x05);
-//   Wire.endTransmission();
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x1C);
-//   Wire.write(0x10);
-//   Wire.endTransmission();
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x3B);
-//   Wire.endTransmission(); 
-//   Wire.requestFrom(0x68,6);
-//   int16_t AccXLSB = Wire.read() << 8 | Wire.read();
-//   int16_t AccYLSB = Wire.read() << 8 | Wire.read();
-//   int16_t AccZLSB = Wire.read() << 8 | Wire.read();
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x1B); 
-//   Wire.write(0x8);
-//   Wire.endTransmission();                                                   
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x43);
-//   Wire.endTransmission();
-//   Wire.requestFrom(0x68,6);
-//   int16_t GyroX=Wire.read()<<8 | Wire.read();
-//   int16_t GyroY=Wire.read()<<8 | Wire.read();
-//   int16_t GyroZ=Wire.read()<<8 | Wire.read();
-//   RateRoll=(float)GyroX/65.5;
-//   RatePitch=(float)GyroY/65.5;
-//   RateYaw=(float)GyroZ/65.5;
-//   AccxOffset = -0.02;
-//   AccyOffset = 0.01;
-//   AcczOffset = 0.02;
-//   AccX=(float)AccXLSB/4096 + AccxOffset;
-//   AccY=(float)AccYLSB/4096 + AccyOffset;
-//   AccZ=(float)AccZLSB/4096 + AcczOffset;
-//   AngleRoll=atan(AccY/sqrt(AccX*AccX+AccZ*AccZ))*1/(3.142/180);
-//   AnglePitch=-atan(AccX/sqrt(AccY*AccY+AccZ*AccZ))*1/(3.142/180);
-// }
-// void setup() {
-//   Serial.begin(57600);
-//   pinMode(13, OUTPUT);
-//   digitalWrite(13, HIGH);
-//   Wire.setClock(400000);
-//   Wire.begin();
-//   delay(250);
-//   Wire.beginTransmission(0x68); 
-//   Wire.write(0x6B);
-//   Wire.write(0x00);
-//   Wire.endTransmission();
-// }
-// void loop() {
-//   gyro_signals();
-
-//   // Serial.print("[ax, ay, az] [g] = [");
-//   // Serial.print(AccX);
-//   // Serial.print(", ");
-//   // Serial.print(AccY);
-//   // Serial.print(", ");
-//   // Serial.print(AccZ);
-//   // Serial.println("]");
-
-//   Serial.print("[thx, thy] [°] = [");
-//   Serial.print(AngleRoll);
-//   Serial.print(", ");
-//   Serial.print(AnglePitch);
-//   Serial.println("]");
-
-//   delay(50);
-// }
-
-
-
-
-// // Part V: Gyroscope Calibration
-// /*
-// The contents of this code and instructions are the intellectual property of Carbon Aeronautics. 
-// The text and figures in this code and instructions are licensed under a Creative Commons Attribution - Noncommercial - ShareAlike 4.0 International Public Licence. 
-// This license lets you remix, adapt, and build upon your work non-commercially, as long as you credit Carbon Aeronautics 
-// (but not in any way that suggests that we endorse you or your use of the work) and license your new creations under the identical terms.
-// This code and instruction is provided "As Is” without any further warranty. Neither Carbon Aeronautics or the author has any liability to any person or entity 
-// with respect to any loss or damage caused or declared to be caused directly or indirectly by the instructions contained in this code or by 
-// the software and hardware described in it. As Carbon Aeronautics has no control over the use, setup, assembly, modification or misuse of the hardware, 
-// software and information described in this manual, no liability shall be assumed nor accepted for any resulting damage or injury. 
-// By the act of copying, use, setup or assembly, the user accepts all resulting liability.
-
-// 1.0  5 October 2022 -  initial release
-// */
-
-// #include <Arduino.h>
-// #include <Wire.h>
-// float RateRoll, RatePitch, RateYaw;
-// float RateCalibrationRoll, RateCalibrationPitch, RateCalibrationYaw;
-// int RateCalibrationNumber;
-// void gyro_signals(void) {
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x1A);
-//   Wire.write(0x05);
-//   Wire.endTransmission(); 
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x1B);
-//   Wire.write(0x08);
-//   Wire.endTransmission();
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x43);
-//   Wire.endTransmission(); 
-//   Wire.requestFrom(0x68,6);
-//   int16_t GyroX=Wire.read()<<8 | Wire.read();
-//   int16_t GyroY=Wire.read()<<8 | Wire.read();
-//   int16_t GyroZ=Wire.read()<<8 | Wire.read();
-//   RateRoll=(float)GyroX/65.5;
-//   RatePitch=(float)GyroY/65.5;
-//   RateYaw=(float)GyroZ/65.5;
-// }
-// void setup() {
-//   Serial.begin(57600);
-//   pinMode(13, OUTPUT);
-//   digitalWrite(13, HIGH);
-//   Wire.setClock(400000);
-//   Wire.begin();
-//   delay(250);
-//   Wire.beginTransmission(0x68); 
-//   Wire.write(0x6B);
-//   Wire.write(0x00);
-//   Wire.endTransmission();
-//   for (RateCalibrationNumber=0;
-//          RateCalibrationNumber<2000; 
-//          RateCalibrationNumber ++) {
-//     gyro_signals();
-//     RateCalibrationRoll+=RateRoll;
-//     RateCalibrationPitch+=RatePitch;
-//     RateCalibrationYaw+=RateYaw;
-//     delay(1);
-//   }
-//   RateCalibrationRoll/=2000;
-//   RateCalibrationPitch/=2000;
-//   RateCalibrationYaw/=2000;   
-// }
-// void loop() {
-//   gyro_signals();
-//   RateRoll-=RateCalibrationRoll;
-//   RatePitch-=RateCalibrationPitch;
-//   RateYaw-=RateCalibrationYaw;
-
-//   Serial.print("[w_bx, w_by, w_bz] [°/s] = [");
-//   Serial.print(RateCalibrationRoll);
-//   Serial.print(", ");
-//   Serial.print(RateCalibrationPitch);
-//   Serial.print(", ");
-//   Serial.print(RateCalibrationYaw);
-//   Serial.println("]");
-
-//   Serial.print("[wx, wy, wz] [°/s] = [");
-//   Serial.print(RateRoll);
-//   Serial.print(", ");
-//   Serial.print(RatePitch);
-//   Serial.print(", ");
-//   Serial.print(RateYaw);
-//   Serial.println("]");
-
-
-//   delay(50);
-// }
-
-
-
-
-// // Part IV: MPU-6050 gyroscope
-// /*
-// The contents of this code and instructions are the intellectual property of Carbon Aeronautics. 
-// The text and figures in this code and instructions are licensed under a Creative Commons Attribution - Noncommercial - ShareAlike 4.0 International Public Licence. 
-// This license lets you remix, adapt, and build upon your work non-commercially, as long as you credit Carbon Aeronautics 
-// (but not in any way that suggests that we endorse you or your use of the work) and license your new creations under the identical terms.
-// This code and instruction is provided "As Is” without any further warranty. Neither Carbon Aeronautics or the author has any liability to any person or entity 
-// with respect to any loss or damage caused or declared to be caused directly or indirectly by the instructions contained in this code or by 
-// the software and hardware described in it. As Carbon Aeronautics has no control over the use, setup, assembly, modification or misuse of the hardware, 
-// software and information described in this manual, no liability shall be assumed nor accepted for any resulting damage or injury. 
-// By the act of copying, use, setup or assembly, the user accepts all resulting liability.
-
-// 1.0  5 October 2022 -  initial release
-// */
-
-// #include <Arduino.h>
-// #include <Wire.h>
-// float RateRoll, RatePitch, RateYaw;
-// void gyro_signals(void) {
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x1A);
-//   Wire.write(0x05);
-//   Wire.endTransmission(); 
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x1B); 
-//   Wire.write(0x8); 
-//   Wire.endTransmission(); 
-//   Wire.beginTransmission(0x68);
-//   Wire.write(0x43);
-//   Wire.endTransmission();
-//   Wire.requestFrom(0x68,6);
-//   int16_t GyroX=Wire.read()<<8 | Wire.read();
-//   int16_t GyroY=Wire.read()<<8 | Wire.read();
-//   int16_t GyroZ=Wire.read()<<8 | Wire.read();
-//   RateRoll=(float)GyroX/65.5;
-//   RatePitch=(float)GyroY/65.5;
-//   RateYaw=(float)GyroZ/65.5;
-// }
-// void setup() {
-//   Serial.begin(57600);
-//   pinMode(13, OUTPUT);
-//   digitalWrite(13, HIGH);
-//   Wire.setClock(400000);
-//   Wire.begin();
-//   delay(250);
-//   Wire.beginTransmission(0x68); 
-//   Wire.write(0x6B);
-//   Wire.write(0x00);
-//   Wire.endTransmission();
-// }
-// void loop() {
-//   gyro_signals();
-  
-//   Serial.print("[wx, wy, wz] [°/s] = [");
-//   Serial.print(RateRoll);
-//   Serial.print(", ");
-//   Serial.print(RatePitch);
-//   Serial.print(", ");
-//   Serial.print(RateYaw);
-//   Serial.println("]");
-
-//   delay(50);
-// }
-
-
-
-
